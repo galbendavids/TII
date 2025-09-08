@@ -11,6 +11,7 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
 import io
 import base64
+from math import erf, sqrt as msqrt
 
 # Page configuration
 st.set_page_config(
@@ -67,11 +68,12 @@ if 'optimized_portfolio' in st.session_state:
     del st.session_state.optimized_portfolio
 else:
     sample_portfolio = {
-        "AAPL": 30,
-        "MSFT": 25,
-        "GOOGL": 20,
-        "AMZN": 15,
-        "TSLA": 10
+        "QQQ": 30,
+        "MAGS": 10,
+        "XAR": 20,
+        "VXUS": 15,
+        "SPY": 10,
+        "XLV": 15
     }
 
 for i, (ticker, percentage) in enumerate(sample_portfolio.items()):
@@ -111,6 +113,24 @@ benchmark = st.sidebar.selectbox(
     "בחר benchmark",
     ["SPY", "QQQ", "IWM", "TLT", "GLD", "BTC-USD"],
     help="SPY = S&P 500, QQQ = NASDAQ, IWM = Russell 2000, TLT = Treasury Bonds, GLD = Gold, BTC-USD = Bitcoin"
+)
+
+# Safety slider: user's confidence not to lose money in alternative portfolios
+st.sidebar.subheader("רמת ביטחון שלא אפסיד כסף (תיקים חלופיים)")
+safety_level = st.sidebar.slider(
+    "safety",
+    min_value=0,
+    max_value=100,
+    value=50,
+    help="0 = לא אכפת לי להפסיד, 100 = ביטחון מלא שלא אפסיד"
+)
+
+# Lock specific tickers for alternative suggestions
+st.sidebar.subheader("נעילה: אל תשנה אחוזים במניות הנבחרות")
+locked_tickers = st.sidebar.multiselect(
+    "בחר מניות לנעילה",
+    options=list(portfolio.keys()),
+    help="המניות שנבחרו ישמרו על אחוז ההשקעה הנוכחי באופטימיזציה"
 )
 
 # Instructions
@@ -207,11 +227,25 @@ if run_analysis and portfolio and total_percentage == 100:
             benchmark_drawdown = (benchmark_cumulative - benchmark_rolling_max) / benchmark_rolling_max
             benchmark_max_drawdown = benchmark_drawdown.min() * 100
             
+            # Probability of not losing money over selected period
+            log_returns_main = np.log1p(weighted_returns)
+            trading_days_main = len(log_returns_main)
+            mu_log_main = log_returns_main.mean()
+            sigma_log_main = log_returns_main.std()
+            if sigma_log_main == 0:
+                p_no_loss_main = 1.0 if mu_log_main > 0 else 0.0
+            else:
+                mean_sum_main = mu_log_main * trading_days_main
+                std_sum_main = sigma_log_main * np.sqrt(trading_days_main)
+                z_main = (0 - mean_sum_main) / std_sum_main
+                cdf_main = 0.5 * (1 + erf(z_main / msqrt(2)))
+                p_no_loss_main = 1 - cdf_main
+            
             # Display results
             st.header("📊 תוצאות הניתוח")
             
             # Performance comparison
-            col1, col2, col3, col4 = st.columns(4)
+            col1, col2, col3, col4, col5 = st.columns(5)
             
             with col1:
                 st.metric("תשואה כוללת", f"{total_return:.2f}%", f"{total_return - benchmark_total_return:.2f}%")
@@ -224,6 +258,10 @@ if run_analysis and portfolio and total_percentage == 100:
             
             with col4:
                 st.metric("Max Drawdown", f"{max_drawdown:.2f}%", f"{max_drawdown - benchmark_max_drawdown:.2f}%")
+            with col5:
+                st.metric("סיכוי לא להפסיד", f"{p_no_loss_main*100:.1f}%")
+            if p_no_loss_main * 100 < safety_level:
+                st.warning(f"רמת הביטחון מחושבת ({p_no_loss_main*100:.1f}%) נמוכה מהסף שנבחר ({safety_level}%). שקול לשנות הקצאות או להפחית סיכון.")
             
             # Portfolio composition
             st.subheader("הרכב התיק")
@@ -310,6 +348,106 @@ if run_analysis and portfolio and total_percentage == 100:
             })
             
             st.dataframe(metrics_df, use_container_width=True)
+
+            # Additional comparative analyses: 5, 10, 15, 20 years (portfolio vs benchmark)
+            st.subheader("ניתוחים נוספים: השוואת תיק מול Benchmark (5/10/15/20 שנים)")
+            compare_periods = {
+                '5 שנים': 1260,
+                '10 שנים': 2520,
+                '15 שנים': 3780,
+                '20 שנים': 5040
+            }
+            for label_ep, days_ep in compare_periods.items():
+                ep_end = pd.Timestamp(end_date)
+                ep_start = ep_end - pd.Timedelta(days=days_ep)
+                # fetch data
+                ep_portfolio_data = fetch_data(list(portfolio.keys()), ep_start, ep_end)
+                ep_bench_data = fetch_data([benchmark], ep_start, ep_end)
+                if not ep_portfolio_data or not ep_bench_data:
+                    st.info(f"{label_ep}: אין מספיק נתונים לכל הרכיבים.")
+                    continue
+                # Portfolio metrics
+                ep_df = pd.DataFrame(ep_portfolio_data).fillna(method='ffill')
+                ep_returns = ep_df.pct_change().dropna()
+                if ep_returns.empty:
+                    st.info(f"{label_ep}: אין נתוני תשואות תקפים לתיק.")
+                    continue
+                ep_weights = np.array(list(portfolio.values())) / 100
+                if ep_returns.shape[1] != len(ep_weights):
+                    try:
+                        ep_df_aligned = ep_df[list(portfolio.keys())]
+                        ep_returns = ep_df_aligned.pct_change().dropna()
+                    except Exception:
+                        st.info(f"{label_ep}: אי התאמה בין משקולות לעמודות נתונים.")
+                        continue
+                ep_port_ret = (ep_returns * ep_weights).sum(axis=1)
+                ep_cum = (1 + ep_port_ret).cumprod()
+                ep_total_return = (ep_cum.iloc[-1] - 1) * 100
+                ep_vol = ep_port_ret.std() * np.sqrt(252) * 100
+                ep_sharpe = (ep_port_ret.mean() * 252 - risk_free_rate) / (ep_port_ret.std() * np.sqrt(252))
+                ep_log = np.log1p(ep_port_ret)
+                ep_t = len(ep_log)
+                mu_ep = ep_log.mean()
+                sig_ep = ep_log.std()
+                if sig_ep == 0:
+                    p_no_loss_ep = 1.0 if mu_ep > 0 else 0.0
+                else:
+                    mean_sum_ep = mu_ep * ep_t
+                    std_sum_ep = sig_ep * np.sqrt(ep_t)
+                    z_ep = (0 - mean_sum_ep) / std_sum_ep
+                    cdf_ep = 0.5 * (1 + erf(z_ep / msqrt(2)))
+                    p_no_loss_ep = 1 - cdf_ep
+                # Benchmark metrics
+                ep_bench_series = pd.Series(ep_bench_data[benchmark]).dropna()
+                ep_bench_ret = ep_bench_series.pct_change().dropna()
+                if ep_bench_ret.empty:
+                    st.info(f"{label_ep}: אין נתוני תשואות תקפים ל-Benchmark.")
+                    continue
+                ep_bench_cum = (1 + ep_bench_ret).cumprod()
+                ep_bench_total_return = (ep_bench_cum.iloc[-1] - 1) * 100
+                ep_bench_vol = ep_bench_ret.std() * np.sqrt(252) * 100
+                ep_bench_sharpe = (ep_bench_ret.mean() * 252 - risk_free_rate) / (ep_bench_ret.std() * np.sqrt(252))
+                ep_bench_log = np.log1p(ep_bench_ret)
+                ep_bt = len(ep_bench_log)
+                mu_b = ep_bench_log.mean()
+                sig_b = ep_bench_log.std()
+                if sig_b == 0:
+                    p_no_loss_bench = 1.0 if mu_b > 0 else 0.0
+                else:
+                    mean_sum_b = mu_b * ep_bt
+                    std_sum_b = sig_b * np.sqrt(ep_bt)
+                    z_b = (0 - mean_sum_b) / std_sum_b
+                    cdf_b = 0.5 * (1 + erf(z_b / msqrt(2)))
+                    p_no_loss_bench = 1 - cdf_b
+                # Display side-by-side
+                st.markdown(f"**{label_ep}**")
+                c1, c2, c3, c4, c5 = st.columns(5)
+                with c1:
+                    st.markdown("**מדד**")
+                    st.write("תשואה כוללת")
+                    st.write("Sharpe Ratio")
+                    st.write("תנודתיות")
+                    st.write("סיכוי לא להפסיד")
+                with c2:
+                    st.markdown("**תיק**")
+                    st.write(f"{ep_total_return:.2f}%")
+                    st.write(f"{ep_sharpe:.2f}")
+                    st.write(f"{ep_vol:.2f}%")
+                    st.write(f"{p_no_loss_ep*100:.1f}%")
+                with c3:
+                    st.markdown("**Benchmark**")
+                    st.write(f"{ep_bench_total_return:.2f}%")
+                    st.write(f"{ep_bench_sharpe:.2f}")
+                    st.write(f"{ep_bench_vol:.2f}%")
+                    st.write(f"{p_no_loss_bench*100:.1f}%")
+                with c4:
+                    st.markdown("**הפרש (תיק - Benchmark)**")
+                    st.write(f"{ep_total_return - ep_bench_total_return:.2f}%")
+                    st.write(f"{ep_sharpe - ep_bench_sharpe:.2f}")
+                    st.write(f"{ep_vol - ep_bench_vol:.2f}%")
+                    st.write(f"{(p_no_loss_ep - p_no_loss_bench)*100:.1f}%")
+                with c5:
+                    st.empty()
             
             # PDF Export
             st.subheader("ייצוא PDF")
@@ -406,7 +544,9 @@ if suggest_combination and portfolio and total_percentage == 100:
             '6 חודשים': 126,  # ~126 trading days
             '1 שנה': 252,     # ~252 trading days
             '2 שנים': 504,    # ~504 trading days
-            '5 שנים': 1260    # ~1260 trading days
+            '5 שנים': 1260,   # ~1260 trading days
+            '10 שנים': 2520,  # ~2520 trading days
+            '15 שנים': 3780   # ~3780 trading days
         }
         results = {}
         for label, days in periods.items():
@@ -433,9 +573,32 @@ if suggest_combination and portfolio and total_percentage == 100:
             best_score = -999
             best_portfolio = None
             best_metrics = None
+            trading_days = len(returns_df)
+            # Build baseline weights vector aligned to available columns and normalized to 100
+            cols = list(returns_df.columns)
+            baseline_raw = np.array([portfolio.get(sym, 0) for sym in cols], dtype=float)
+            baseline_sum = baseline_raw.sum()
+            if baseline_sum == 0:
+                baseline_weights = np.zeros_like(baseline_raw)
+            else:
+                baseline_weights = baseline_raw / baseline_sum * 100
+            # Build locking mask aligned to available columns
+            locked_mask = np.array([1 if sym in locked_tickers else 0 for sym in cols], dtype=int)
+            locked_weights = baseline_weights * locked_mask
+            locked_total = locked_weights.sum()
+            all_locked = int((locked_mask == 1).all())
             for i in range(5000):
-                weights = np.random.random(len(returns_df.columns))
-                weights = weights / weights.sum() * 100
+                if all_locked:
+                    # No suggestion possible if everything is locked
+                    continue
+                # Randomize only the unlocked portion and normalize to remaining budget
+                rand = np.random.random(len(cols))
+                rand = rand * (1 - locked_mask)  # zero for locked
+                if rand.sum() == 0:
+                    # if random produced zeros for all unlocked, try again
+                    continue
+                rand = rand / rand.sum() * max(0.0, 100.0 - locked_total)
+                weights = locked_weights + rand
                 portfolio_returns = (returns_df * (weights / 100)).sum(axis=1)
                 risk_free_rate = 0.02
                 sharpe = (portfolio_returns.mean() * 252 - risk_free_rate) / (portfolio_returns.std() * np.sqrt(252))
@@ -445,6 +608,26 @@ if suggest_combination and portfolio and total_percentage == 100:
                 rolling_max = cumulative.expanding().max()
                 drawdown = (cumulative - rolling_max) / rolling_max
                 max_dd = drawdown.min() * 100
+                # Estimate probability of not losing money over the period using normal approximation on log-returns
+                log_returns = np.log1p(portfolio_returns)
+                mu_log = log_returns.mean()
+                sigma_log = log_returns.std()
+                if sigma_log == 0:
+                    p_no_loss = 1.0 if mu_log > 0 else 0.0
+                else:
+                    mean_sum = mu_log * trading_days
+                    std_sum = sigma_log * np.sqrt(trading_days)
+                    z = (0 - mean_sum) / std_sum
+                    # Standard normal CDF via erf
+                    cdf = 0.5 * (1 + erf(z / msqrt(2)))
+                    p_no_loss = 1 - cdf
+                # Filter by user-selected safety level
+                if p_no_loss * 100 < safety_level:
+                    continue
+                # Enforce max 45% total change (L1 distance in percentage points)
+                l1_change = float(np.abs(weights - baseline_weights).sum())
+                if l1_change > 45:
+                    continue
                 # Score: 60% Sharpe, 40% total return
                 score = sharpe * 0.6 + (total_return / 100) * 0.4
                 if score > best_score:
@@ -454,7 +637,8 @@ if suggest_combination and portfolio and total_percentage == 100:
                         'sharpe': sharpe,
                         'total_return': total_return,
                         'volatility': volatility,
-                        'max_drawdown': max_dd
+                        'max_drawdown': max_dd,
+                        'p_no_loss': p_no_loss * 100
                     }
             if best_portfolio:
                 results[label] = {
@@ -470,7 +654,7 @@ if suggest_combination and portfolio and total_percentage == 100:
                     'אחוז השקעה מוצע': [f"{w:.1f}%" for w in res['portfolio'].values()]
                 })
                 st.dataframe(df, use_container_width=True)
-                col1, col2, col3, col4 = st.columns(4)
+                col1, col2, col3, col4, col5 = st.columns(5)
                 with col1:
                     st.metric("Sharpe Ratio", f"{res['metrics']['sharpe']:.2f}")
                 with col2:
@@ -479,6 +663,8 @@ if suggest_combination and portfolio and total_percentage == 100:
                     st.metric("תנודתיות", f"{res['metrics']['volatility']:.2f}%")
                 with col4:
                     st.metric("Max Drawdown", f"{res['metrics']['max_drawdown']:.2f}%")
+                with col5:
+                    st.metric("סיכוי לא להפסיד", f"{res['metrics']['p_no_loss']:.1f}%")
         else:
             st.error("לא ניתן לבצע אופטימיזציה - נדרשות לפחות 2 מניות עם נתונים זמינים בכל תקופה")
 
