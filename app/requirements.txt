@@ -1,0 +1,12 @@
+# This file lists the Python tools our app needs to run.
+# Think of it like a shopping list for the computer.
+# When we build or install, Python reads this list and grabs these packages.
+fastapi
+uvicorn[standard]
+SQLAlchemy>=2.0
+psycopg2-binary
+pandas
+yfinance
+numpy
+pydantic
+python-dotenv

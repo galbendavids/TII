@@ -1,0 +1,11 @@
+# This file is a simple schedule for automatic tasks (like an alarm clock).
+# What it does:
+# - Every day at 14:05, it calls the /ingest endpoint to fetch new prices.
+# - Every day at 14:07, it calls the /signals/notify endpoint to compute a new signal and send email.
+# Why it matters:
+# - Keeps the database updated and the signal fresh without a person pressing buttons.
+# Times are in the container's timezone.
+# Format columns: minute hour day-of-month month day-of-week  <command>
+# ┌─min ┌─hour ┌─dom ┌─mon ┌─dow
+  5     14     *     *     *   curl -s -X POST http://127.0.0.1:8000/ingest >/dev/null
+  7     14     *     *     *   curl -s -X POST http://127.0.0.1:8000/signals/notify >/dev/null

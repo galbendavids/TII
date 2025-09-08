@@ -1,0 +1,46 @@
+usdils-mvp/
+├─ app/
+│  ├─ main.py
+│  ├─ db.py
+│  ├─ ingestor.py
+│  ├─ signals.py
+│  ├─ emailer.py
+│  ├─ requirements.txt
+│  └─ supercronic.cron
+├─ Dockerfile
+└─ .env.example
+
+What the app does (simple):
+- Tracks the USD to ILS exchange rate over time.
+- Saves those prices in a database so we have a history.
+- Calculates a simple suggestion (signal): buy USD, sell USD, or hold.
+- Exposes a tiny web API so other tools can fetch the latest price and signal.
+- Automatically updates itself every day using a small scheduler.
+
+How it works (technical):
+- Data ingestion: `app/ingestor.py` uses `yfinance` to download OHLCV for `USDILS=X`.
+  - It normalizes columns to (`ts`, `open`, `high`, `low`, `close`, `volume`, `pair`).
+  - It upserts into Postgres via SQLAlchemy, table `fx_rates (ts PRIMARY KEY, ...)`.
+- Database: `app/db.py` reads `DATABASE_URL`, builds a SQLAlchemy `engine`, and runs DDL
+  to ensure tables `fx_rates` and `fx_signals` exist (idempotent `CREATE TABLE IF NOT EXISTS`).
+- Signals: `app/signals.py` loads USDILS closes ordered by time, computes a 30-day rolling
+  mean and standard deviation, then a z-score `z30 = (close - ma30)/sd30`.
+  - If `z30 >= 1.5` ⇒ action `usd_to_ils` (USD expensive). If `z30 <= -1.5` ⇒ `ils_to_usd`.
+  - Else action `hold`. Confidence scales with how far z is beyond the threshold, capped 0.95.
+  - The decision is upserted into `fx_signals` keyed by `ts`.
+  - Extra fields are returned for UI/emails: `latest_close`, `ma30`, `sd30`, `z30`,
+    `projected_mean` (naive mean reversion), and threshold bands `upper_band`/`lower_band`.
+- Email: `app/emailer.py` sends notifications via SMTP using env vars
+  `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `EMAIL_FROM`, `EMAIL_TO`.
+- API: `app/main.py` is a FastAPI app with endpoints:
+  - `GET /rates/latest` returns most recent `ts, close` for USDILS.
+  - `POST /ingest` triggers `run_daily_update()` to fetch/save recent prices.
+  - `POST /signals/run` computes and stores a fresh signal, returns it.
+  - `GET /signals/latest` returns the newest stored signal row.
+- Scheduling: `app/supercronic.cron` runs two daily jobs inside the container:
+  - 14:05 → POST `/ingest` (refresh prices)
+  - 14:07 → POST `/signals/run` (recompute signal)
+- Container: `Dockerfile` installs Python deps and `supercronic`, copies code, then starts
+  both the scheduler and the API in one container on port 8000.
+  - Uses `/data` as a persistent volume path for SQLite database `app.db` when no
+    `DATABASE_URL` is provided. In RunPod, mount a volume to `/data` to persist data.
