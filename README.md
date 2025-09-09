@@ -98,45 +98,6 @@ Notes:
 
 ---
 
-## Deploy on RunPod
-
-RunPod can host containerized apps. For Streamlit, you’ll run a CPU pod serving port 8501.
-
-### 1) Prepare and push an image
-Use the single Dockerfile provided in this repo (`dockerfile`).
-```bash
-docker login
-docker build -t <dockerhub-user>/whatifwealth:latest -f dockerfile .
-docker push <dockerhub-user>/whatifwealth:latest
-
-for me.. 
-docker login
-docker build -t galbendavids/whatifwealth:latest -f dockerfile .
-docker push galbendavids/whatifwealth:latest
-```
-
-### 2) Create a Pod on RunPod (recommended)
-1. In RunPod, click "Create Pod".
-2. Select a CPU template (GPU not required).
-3. Container Image: `docker.io/<dockerhub-user>/whatifwealth:latest`.
-4. Container Port: add TCP `8501`.
-5. Command/Entrypoint: leave default if you used the Dockerfile above (it already starts Streamlit on 0.0.0.0:8501).
-6. Volumes: not required for this app.
-7. Environment variables: none required.
-8. Start the Pod.
-
-### 3) Access the app
-- Once running, open the Pod details and locate the public URL for port 8501.
-- Navigate to `http://<YOUR-POD-HOST>:8501`.
-
-### 4) Alternative: Serverless HTTP (optional)
-RunPod Serverless can work, but Streamlit apps often expect a long-lived process and websocket support. A full (persistent) Pod is recommended for reliability.
-
-### Troubleshooting (RunPod)
-- If the page doesn’t load: confirm port 8501 is exposed and public routing is enabled.
-- If the container exits: check Pod logs. Ensure the entrypoint runs Streamlit, not Uvicorn.
-- Data errors from `yfinance`: transient rate limits or unavailable symbols; try again or change tickers/date range.
-
 ---
 
 ## Frequently asked questions
