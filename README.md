@@ -1,143 +1,157 @@
-## USDILS FX App — Run end-to-end on RunPod (Step-by-step for a programmer)
+## WhatIfWealth — Backtesting Portfolio App (Streamlit)
 
-This guide takes you from 0 to 100: you’ll deploy a tiny API that:
-- Downloads USD/ILS prices daily
-- Stores them in Postgres
-- Computes a simple buy/sell/hold signal
-- Serves everything over HTTP
+An interactive Streamlit app to analyze a custom stock portfolio against popular benchmarks over different historical periods. You can:
+- Compare cumulative returns, volatility, Sharpe ratio, and max drawdown vs. a benchmark.
+- Visualize performance and drawdowns with Plotly charts.
+- Generate optimized alternative allocations under constraints (locking tickers, safety level, limited change budget).
+- Export a concise PDF report with portfolio composition and key metrics.
 
-We’ll run it all in a Docker container on RunPod. No prior cloud experience needed.
+The UI is primarily in Hebrew and is designed for ease of use.
 
-### 1) What you need (quick checklist)
-- A free Docker Hub account (or any container registry)
-- A RunPod account
-- Your computer with Docker installed
+### Project structure
+- `app.py` — Streamlit application (UI, analytics, optimization, PDF export)
+- `dockerfile` — Container build file. Note: the current file in this repo is tailored for a different (FastAPI + cron) setup. For this Streamlit app, use the Docker instructions below which include a minimal Dockerfile you can copy-paste.
 
-### 2) Database? Not needed — using SQLite on RunPod
-By default, the app writes to a SQLite file at `/data/app.db` inside the container.
-No external DB is required. If you still want Postgres, set `DATABASE_URL`.
+### Requirements
+- Python 3.10+ (tested with 3.11)
+- macOS, Linux, or Windows
+- Internet connectivity (for `yfinance` data)
 
-### 3) Clone the project locally
+Python packages used:
+- `streamlit`, `pandas`, `yfinance`, `plotly`, `numpy`, `reportlab`
+
+---
+
+## Run locally (recommended for development)
+
+### 1) Clone
 ```bash
-git clone <your fork or this repo>
+git clone <your-repo-url>
 cd TII
 ```
 
-Project layout (important bits):
-- `app/main.py`: FastAPI app and endpoints
-- `app/ingestor.py`: downloads USDILS prices and saves to DB
-- `app/signals.py`: computes the trading signal and saves to DB
-- `app/db.py`: creates tables and connects to DB
-- `app/supercronic.cron`: schedules daily ingest + signal run inside the container
-- `dockerfile`: builds the container that runs both cron and the API
+### 2) Create a virtual environment
+```bash
+python3 -m venv .venv
+source .venv/bin/activate  # Windows: .venv\\Scripts\\activate
+python -V
+```
 
-### 4) Build your Docker image
-Pick a unique image name, like `dockerhub-username/usdils-mvp:latest`.
+### 3) Install dependencies
+```bash
+pip install --upgrade pip
+pip install -r requirements.txt
+```
 
+### 4) Run the app
+```bash
+streamlit run app.py
+```
+
+By default Streamlit starts at `http://localhost:8501`.
+
+### 5) Using the app
+- הגדר טווח תאריכים בסרגל הצד.
+- הזן מניות ואחוזי השקעה (סה"כ 100%).
+- בחר Benchmark להשוואה (SPY/QQQ/...).
+- לחץ "הרץ ניתוח" לראות מדדים, גרפים והשוואות.
+- לאופטימיזציה, לחץ "הצע שילוב חדש", קבע רמת ביטחון ונעילת מניות.
+- ניתן להוריד דוח PDF מסכם.
+
+### Troubleshooting (local)
+- If data is missing: try different dates or tickers; free data can be sparse or rate limited.
+- If Streamlit doesn’t open: ensure the terminal shows a URL and that port 8501 is not blocked.
+- If `reportlab` fails to render fonts: update `reportlab` or try reinstalling it.
+
+---
+
+## Run in Docker (locally)
+
+The provided `dockerfile` in this repo is for a different app stack. Replace its contents with the following minimal Dockerfile content for Streamlit (or create a new file named exactly `dockerfile` with this content):
+
+```dockerfile
+FROM python:3.11-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY requirements.txt /app/
+RUN pip install --no-cache-dir -r requirements.txt
+COPY app.py /app/
+
+EXPOSE 8501
+CMD ["streamlit", "run", "app.py", "--server.address=0.0.0.0", "--server.port=8501"]
+```
+
+### Build and run
+```bash
+docker build -t whatifwealth:latest -f dockerfile .
+docker run --rm -p 8501:8501 whatifwealth:latest
+```
+
+Open `http://localhost:8501`.
+
+Notes:
+- If you prefer to reuse the existing `dockerfile`, you must adapt it to Streamlit (expose port 8501 and run Streamlit instead of Uvicorn). The snippet above already does this.
+
+---
+
+## Deploy on RunPod
+
+RunPod can host containerized apps. For Streamlit, you’ll run a CPU pod serving port 8501.
+
+### 1) Prepare and push an image
+Use the single Dockerfile provided in this repo (`dockerfile`).
 ```bash
 docker login
-docker build -t dockerhub-username/usdils-mvp:latest .
-docker push dockerhub-username/usdils-mvp:latest
+docker build -t <dockerhub-user>/whatifwealth:latest -f dockerfile .
+docker push <dockerhub-user>/whatifwealth:latest
 ```
 
-If the push works, your image is now in Docker Hub.
+### 2) Create a Pod on RunPod (recommended)
+1. In RunPod, click "Create Pod".
+2. Select a CPU template (GPU not required).
+3. Container Image: `docker.io/<dockerhub-user>/whatifwealth:latest`.
+4. Container Port: add TCP `8501`.
+5. Command/Entrypoint: leave default if you used the Dockerfile above (it already starts Streamlit on 0.0.0.0:8501).
+6. Volumes: not required for this app.
+7. Environment variables: none required.
+8. Start the Pod.
 
-### 5) Prepare environment variables
-The app needs:
-- `PAIR` (optional): defaults to `USDILS`
-- Email/SMTP (optional, for notifications):
-  - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`
-  - `EMAIL_FROM`, `EMAIL_TO` (comma-separated allowed)
+### 3) Access the app
+- Once running, open the Pod details and locate the public URL for port 8501.
+- Navigate to `http://<YOUR-POD-HOST>:8501`.
 
-Example values:
-```
-PAIR=USDILS
-SMTP_HOST=smtp.yourprovider.com
-SMTP_PORT=587
-SMTP_USER=your_user
-SMTP_PASS=your_password
-EMAIL_FROM=alerts@yourdomain.com
-EMAIL_TO=you@yourdomain.com
-```
+### 4) Alternative: Serverless HTTP (optional)
+RunPod Serverless can work, but Streamlit apps often expect a long-lived process and websocket support. A full (persistent) Pod is recommended for reliability.
 
-### 6) Create a RunPod deployment (SQLite only)
-RunPod can run your container 24/7. You have two main options:
+### Troubleshooting (RunPod)
+- If the page doesn’t load: confirm port 8501 is exposed and public routing is enabled.
+- If the container exits: check Pod logs. Ensure the entrypoint runs Streamlit, not Uvicorn.
+- Data errors from `yfinance`: transient rate limits or unavailable symbols; try again or change tickers/date range.
 
-- Serverless (HTTP): Good for on-demand calls; may sleep between requests.
-- Persistent Pod (recommended here): Always on; perfect for cron + API.
+---
 
-Steps (Persistent Pod):
-1. In RunPod, click “Create Pod”.
-2. Choose a CPU-only template (GPU not required) or create a Custom Image.
-3. Set “Container Image” to your Docker image, e.g. `docker.io/dockerhub-username/usdils-mvp:latest`.
-4. Set “Container Ports” to expose TCP 8000.
-5. Add Environment Variables:
-   - `PAIR` = `USDILS` (optional)
-   - SMTP vars if you want email alerts
-6. Add a Persistent Volume in RunPod (e.g., mount `/data`) so your SQLite file survives restarts.
-7. Start the Pod.
+## Frequently asked questions
 
-Our dockerfile launches two things:
-- Supercronic (reads `app/supercronic.cron`) to run daily jobs
-- Uvicorn FastAPI server on port 8000
+- Which Python version should I use?
+  - Python 3.10 or 3.11 is recommended.
 
-### 7) Open the API
-Once the Pod is running:
-1. Find your Pod’s public URL/port mapping in RunPod.
-2. Test the live docs:
-   - Open: `http://<YOUR-POD-HOST>:8000/docs`
-   - You should see the FastAPI Swagger UI.
+- Do I need any API keys?
+  - No. `yfinance` pulls public data without keys.
 
-### 8) Manually trigger a first data load and signal
-Use the API buttons in `/docs` or curl from your laptop:
-```bash
-curl -X POST http://<YOUR-POD-HOST>:8000/ingest
-curl -X POST http://<YOUR-POD-HOST>:8000/signals/run
-```
+- Can I change the UI language?
+  - The code is straightforward Streamlit; modify the text in `app.py` as needed.
 
-Then check results:
-```bash
-curl http://<YOUR-POD-HOST>:8000/rates/latest
-curl http://<YOUR-POD-HOST>:8000/signals/latest
-```
+- Can I export CSVs instead of PDF?
+  - Not built-in. You can add a `st.download_button` with a generated CSV similar to the PDF block.
 
-If you see JSON with values, the pipeline works.
+---
 
-Signal response now includes extra fields for the dashboard and emails:
-```
-{
-  ts, pair, action, confidence, rationale,
-  latest_close, ma30, sd30, z30,
-  projected_mean, upper_band, lower_band
-}
-```
-
-### 9) Daily automation (cron)
-Inside the container, supercronic runs these every day:
-- 14:05 → POST `/ingest`
-- 14:07 → POST `/signals/notify`
-
-You can change times by editing `app/supercronic.cron` and rebuilding/pushing the image.
-
-### 10) Troubleshooting tips
-- API not reachable: confirm RunPod port 8000 is exposed and publicly routed.
-- DB issues: verify `DATABASE_URL` is correct and accessible from the internet.
-- Empty data: wait a minute and try `/ingest` again; yfinance rate limits sometimes.
-- Logs: open the Pod logs in RunPod; look for Python tracebacks.
-
-### 11) Optional: Customize the pair
-Set `PAIR` env var (e.g., `EURILS`) and change the `TICKER` in `app/ingestor.py`
-from `"USDILS=X"` to the matching yfinance symbol (e.g., `"EURILS=X"`), then rebuild
-and push the image.
-
-### 12) Endpoints quick reference
-- `GET /rates/latest` → newest price (ts, close)
-- `POST /ingest` → fetch recent prices and store
-- `POST /signals/run` → compute/store latest signal
-- `GET /signals/latest` → newest stored signal
-- `POST /signals/notify` → compute signal and send email (uses SMTP env vars)
-- `GET /dashboard` → simple HTML page to view metrics and trigger a check
-
-That’s it — you’re live on RunPod with a tiny data+signals API!
-
+## Development tips
+- Use a virtual environment to isolate dependencies.
+- Streamlit’s `st.cache_data` is used for basic caching. If changing logic dramatically, clear cache with the "Rerun" menu in the app.
+- The optimization routine samples many portfolios; on large universes or long windows, increase resources or reduce iterations for speed.
 
