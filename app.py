@@ -12,6 +12,16 @@ from reportlab.lib import colors
 import io
 import base64
 from math import erf, sqrt as msqrt
+import os
+
+# Ensure Streamlit writes to a writable location (fixes permission issues on some hosts like HF Spaces)
+os.environ.setdefault("HOME", "/tmp")
+os.environ.setdefault("XDG_CACHE_HOME", "/tmp")
+os.environ["STREAMLIT_BROWSER_GATHER_USAGE_STATS"] = "false"
+try:
+    os.makedirs(os.path.join(os.environ["HOME"], ".streamlit"), exist_ok=True)
+except Exception:
+    pass
 
 # Page configuration
 st.set_page_config(

@@ -108,6 +108,11 @@ Use the single Dockerfile provided in this repo (`dockerfile`).
 docker login
 docker build -t <dockerhub-user>/whatifwealth:latest -f dockerfile .
 docker push <dockerhub-user>/whatifwealth:latest
+
+for me.. 
+docker login
+docker build -t galbendavids/whatifwealth:latest -f dockerfile .
+docker push galbendavids/whatifwealth:latest
 ```
 
 ### 2) Create a Pod on RunPod (recommended)
